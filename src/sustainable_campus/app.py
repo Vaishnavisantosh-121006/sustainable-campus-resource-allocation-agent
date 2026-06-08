@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import os
 import streamlit as st
 import pandas as pd
@@ -557,3 +560,4 @@ with tab_sustainability:
         st.plotly_chart(fig_sat, use_container_width=True)
     else:
         st.warning("Please run a simulation on the 'Live Simulation' page to see sustainability reports.")
+
