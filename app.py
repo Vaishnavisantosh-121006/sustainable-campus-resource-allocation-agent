@@ -359,6 +359,7 @@ with tab_forecast:
             from sklearn.linear_model import LinearRegression
             lr = LinearRegression().fit(X_all, y_all)
             lr_preds = lr.predict(X_t)
+            from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
             
             lr_mae = mean_absolute_error(y_t, lr_preds)
             lr_rmse = np.sqrt(mean_squared_error(y_t, lr_preds))
