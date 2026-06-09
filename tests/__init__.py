@@ -1,1 +1,1 @@
-# Sustainable Campus Resource Allocation Test Suite
+# flat test package init

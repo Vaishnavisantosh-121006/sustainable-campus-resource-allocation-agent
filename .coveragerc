@@ -1,4 +1,0 @@
-[run]
-omit =
-    src/sustainable_campus/app.py
-    tests/*
