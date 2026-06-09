@@ -1,8 +1,10 @@
-# Python Gitignore
+# Python gitignore
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 venv/
 .pytest_cache/
 .coverage
-*.log
+data/campus_energy_demand.csv
+models/*.joblib
+models/*.json

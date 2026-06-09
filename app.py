@@ -1,6 +1,7 @@
 """
-Streamlit Web Dashboard for the Smart Grid Energy Allocation AI Agent.
-Provides an interactive GUI to adjust building load demands and visualize game-theoretic outcomes.
+Streamlit Web Dashboard for the Sustainable Campus Resource Allocation Agent.
+Provides an interactive interface to run microgrid simulations, check load predictions,
+analyze Nash Equilibrium solutions, and view carbon offset analytics.
 """
 
 import sys
@@ -9,173 +10,488 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from src.models import Zone
-from src.game_theory import GameTheoryAllocator
-from src.agent import WasteCollectionAgent  # Class remains named WasteCollectionAgent for compatibility
-from src.environment import Environment
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import joblib
 
-# Page configuration
+# Import flat local modules
+from src.config import default_config, AppConfig
+from src.ai import generate_campus_dataset, train_and_save_models
+from src.simulation import CampusSimulation, calculate_cumulative_metrics
+from src.game_theory import generate_payoff_matrix, solve_game
+
+# ----------------------------------------------------
+# Page Configuration & Styling
+# ----------------------------------------------------
 st.set_page_config(
-    page_title="AI Smart Grid Energy Allocator",
+    page_title="Sustainable Campus Microgrid Allocator",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom Styling
+# Custom Premium Styling
 st.markdown("""
-    <style>
-    .main-title {
-        font-size: 38px;
-        font-weight: bold;
-        color: #0b3c5d;
-        text-align: center;
+<style>
+    .main {
+        background-color: #0d1117;
+        color: #c9d1d9;
+    }
+    .metric-card {
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+        backdrop-filter: blur(5px);
+        margin-bottom: 15px;
+    }
+    .metric-header {
+        font-size: 14px;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
         margin-bottom: 5px;
     }
-    .subtitle {
-        font-size: 18px;
-        color: #555;
-        text-align: center;
-        margin-bottom: 25px;
+    .metric-val {
+        font-size: 32px;
+        font-weight: 700;
+        color: #58a6ff;
     }
-    .section-card {
-        background-color: #f0f4f8;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 5px solid #0b3c5d;
-        margin-bottom: 20px;
+    .metric-sub {
+        font-size: 12px;
+        color: #3fb950;
+        margin-top: 5px;
     }
-    .metric-value {
-        font-size: 24px;
-        font-weight: bold;
-        color: #0b3c5d;
+    h1, h2, h3 {
+        color: #f0f6fc;
+        font-weight: 600;
     }
-    </style>
+    section[data-testid="stSidebar"] {
+        background-color: #161b22;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+</style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-title'>⚡ Smart Grid Energy Resource AI Agent</div>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle'>Game Theory & Microgrid Load Allocator (SDG 7 & 11)</div>", unsafe_allow_html=True)
+# Define directories
+DATA_DIR = "data"
+MODELS_DIR = "models"
+DATA_FILE = os.path.join(DATA_DIR, "campus_energy_demand.csv")
 
-# Sidebar - Grid Settings
-st.sidebar.header("⚡ Grid Capacity Controls")
-total_capacity = st.sidebar.slider("Available Grid Supply (MW)", min_value=1, max_value=5, value=3)
+# ----------------------------------------------------
+# Auto-Generation of Data & Models on Startup
+# ----------------------------------------------------
+if not os.path.exists(DATA_FILE):
+    st.info("Generating synthetic campus energy dataset. This runs only once...")
+    generate_campus_dataset(DATA_FILE)
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🌍 SDG Alignment")
-st.sidebar.info("**SDG 7:** Affordable and Clean Energy\n\n**SDG 11:** Sustainable Cities and Communities")
-
-# Main Page - Interactive Zone Controls
-st.markdown("### 📊 Customize Building Load Demands (Current State)")
-cols = st.columns(5)
-
-zones_data = [
-    {"id": "A", "pop": 1200, "demand": 85, "priority": 5},
-    {"id": "B", "pop": 900, "demand": 40, "priority": 2},
-    {"id": "C", "pop": 1500, "demand": 95, "priority": 5},
-    {"id": "D", "pop": 700, "demand": 60, "priority": 3},
-    {"id": "E", "pop": 1100, "demand": 75, "priority": 4}
+# Ensure models are trained
+model_checkfiles = [
+    os.path.join(MODELS_DIR, "classroom_demand_model.joblib"),
+    os.path.join(MODELS_DIR, "laboratory_demand_model.joblib"),
+    os.path.join(MODELS_DIR, "hostel_demand_model.joblib")
 ]
+if not all(os.path.exists(f) for f in model_checkfiles):
+    st.info("Training demand forecasting models. This runs only once...")
+    train_and_save_models(DATA_FILE, MODELS_DIR)
 
-updated_zones = []
+# ----------------------------------------------------
+# Sidebar Configuration Panel
+# ----------------------------------------------------
+st.sidebar.title("⚡ Microgrid Controls")
+st.sidebar.markdown("Configure grid constants and agent optimization weights.")
 
-for i, z in enumerate(zones_data):
-    with cols[i]:
-        st.markdown(f"#### 🏢 Zone {z['id']}")
-        demand = st.slider(f"Load Demand (%)", min_value=0, max_value=100, value=z['demand'], key=f"d_{z['id']}")
-        priority = st.slider(f"Priority (1-5)", min_value=1, max_value=5, value=z['priority'], key=f"p_{z['id']}")
-        pop = st.number_input(f"Occupancy", min_value=100, max_value=5000, value=z['pop'], step=100, key=f"pop_{z['id']}")
-        
-        updated_zones.append(Zone(z['id'], int(pop), int(demand), int(priority)))
+# Grid Config Inputs
+st.sidebar.subheader("Grid Constants")
+grid_capacity = st.sidebar.number_input("Grid Capacity (kWh/hr)", min_value=100.0, max_value=5000.0, value=1000.0, step=100.0)
+normal_price = st.sidebar.number_input("Normal Price ($/kWh)", min_value=0.01, max_value=1.00, value=0.15, step=0.01)
+peak_price = st.sidebar.number_input("Peak Price ($/kWh)", min_value=0.01, max_value=2.00, value=0.30, step=0.01)
 
-# Execution Button
-if st.button("🚀 Run AI Agent Energy Optimizer", type="primary"):
-    
-    # Initialize environment
-    env = Environment(total_capacity=total_capacity)
-    env.zones = updated_zones
-    
-    # Create Allocator & Agent
-    allocator = GameTheoryAllocator(updated_zones, total_capacity)
-    
-    st.markdown("---")
-    
-    res_col1, res_col2 = st.columns([1, 1])
-    
-    with res_col1:
-        st.markdown("### 🧠 Agent Cognitive Lifecycle Trace")
-        
-        # 1. Perception
-        st.subheader("[1] Perception Stage")
-        st.write("Observing building loads and grid capacity bounds...")
-        perc_df = pd.DataFrame([{
-            "Zone": zone.zone_id,
-            "Demand Level (%)": zone.demand_level,
-            "Priority": zone.priority,
-            "Occupancy": zone.population
-        } for zone in updated_zones])
-        st.dataframe(perc_df, use_container_width=True, hide_index=True)
-        
-        # 2. Reasoning
-        st.subheader("[2] Reasoning Stage")
-        st.write("Calculating electrical utility indices...")
-        util_data = {"Building Zone": [], "Utility Score": []}
-        for zone in updated_zones:
-            util_data["Building Zone"].append(f"Zone {zone.zone_id}")
-            util_data["Utility Score"].append(int(round(zone.utility())))
-        
-        util_df = pd.DataFrame(util_data)
-        st.bar_chart(util_df.set_index("Building Zone"), color="#0b3c5d")
-        
-    with res_col2:
-        # 3. Decision-making
-        st.subheader("[3] Decision-Making Stage (Game Solver)")
-        st.write("Solving for the Pure Strategy Nash Equilibrium (PSNE)...")
-        
-        eq_profile = allocator.find_nash_equilibrium()
-        allocations = allocator.allocate_resources(eq_profile)
-        
-        strat_cols = st.columns(5)
-        for idx, zone in enumerate(updated_zones):
-            with strat_cols[idx]:
-                strat = eq_profile[zone.zone_id]
-                color = "blue" if strat == "REQUEST" else "grey"
-                st.markdown(f"**Zone {zone.zone_id}**\n\n<span style='color:{color};font-weight:bold;'>{strat}</span>", unsafe_allow_html=True)
-        
-        # 4. Action
-        st.subheader("[4] Action Stage")
-        st.write("Grid Power Blocks Routed:")
-        
-        allocated_zones = [z_id for z_id, count in allocations.items() if count > 0]
-        allocated_zones.sort(key=lambda z_id: env.get_zone_by_id(z_id).utility(), reverse=True)
-        
-        mw_num = 1
-        for z_id in allocated_zones:
-            count = allocations[z_id]
-            for _ in range(count):
-                st.info(f"⚡ **1 MW Block {mw_num}** successfully routed to **Zone {z_id}**")
-                mw_num += 1
-        
-        if mw_num == 1:
-            st.warning("No power allocated (all buildings chose local storage/delay).")
+# Agent Weights Inputs
+st.sidebar.subheader("Utility Weights (Sum = 1.0)")
+w_satisfaction = st.sidebar.slider("w1: Satisfaction Weight", 0.0, 1.0, 0.5, 0.05)
+w_sustainability = st.sidebar.slider("w2: Sustainability Weight", 0.0, 1.0, 0.3, 0.05)
+w_cost = st.sidebar.slider("w3: Cost Savings Weight", 0.0, 1.0, 0.2, 0.05)
 
-    # Payoff Matrix Analysis Section
-    st.markdown("### 📊 Grid Payoff Matrix Analysis")
-    st.write("Payoffs computed for different profile decisions to demonstrate stability:")
+# Normalise weights
+total_w = w_satisfaction + w_sustainability + w_cost
+if abs(total_w - 1.0) > 1e-5:
+    w_satisfaction /= total_w
+    w_sustainability /= total_w
+    w_cost /= total_w
+
+# Apply changes to config
+config = AppConfig()
+config.grid.total_capacity_kwh = grid_capacity
+config.grid.normal_price_per_kwh = normal_price
+config.grid.peak_price_per_kwh = peak_price
+config.weights.satisfaction = w_satisfaction
+config.weights.sustainability = w_sustainability
+config.weights.cost = w_cost
+
+# ----------------------------------------------------
+# Header Banner
+# ----------------------------------------------------
+st.title("🌱 Sustainable Campus Resource Allocation Agent")
+st.markdown("An autonomous multi-agent AI system allocating campus energy resources (classrooms, labs, hostels) using Game Theory and Reinforcement Learning.")
+
+# Create Tabs
+tab_home, tab_simulation, tab_forecast, tab_game_theory, tab_sustainability = st.tabs([
+    "🏡 Overview & SDGs",
+    "🏃 Live Simulation",
+    "📈 AI Forecasts",
+    "🎮 Game Theory Nash Solver",
+    "🍃 Sustainability Metrics"
+])
+
+# ----------------------------------------------------
+# TAB 1: HOME / OVERVIEW
+# ----------------------------------------------------
+with tab_home:
+    st.subheader("Project Architecture")
     
-    profiles = [
-        {"Name": "Local Battery Usage (All Delay)", "profile": {z.zone_id: "DELAY" for z in updated_zones}},
-        {"Name": "Nash Equilibrium (Optimized)", "profile": eq_profile},
-        {"Name": "Surge Competition (All Request)", "profile": {z.zone_id: "REQUEST" for z in updated_zones}}
-    ]
+    col_desc, col_graph = st.columns([3, 2])
     
-    payoff_rows = []
-    for p in profiles:
-        payoffs = allocator.calculate_payoffs(p["profile"])
-        row = {"Strategic Choice": p["Name"]}
-        for zone in updated_zones:
-            row[f"Zone {zone.zone_id} Payoff"] = int(round(payoffs[zone.zone_id]))
-        payoff_rows.append(row)
+    with col_desc:
+        st.markdown("""
+        ### Multi-Agent Energy Management System
+        The campus grid manages limited grid electricity capacity. When total energy requested by 
+        Classrooms, Laboratories, and Hostels exceeds available grid capacity, conflict arises. 
         
-    payoff_df = pd.DataFrame(payoff_rows)
-    st.dataframe(payoff_df, use_container_width=True, hide_index=True)
+        This project simulates an autonomous microgrid containing:
+        - **Classroom Agent**: Predicts HVAC and comfort loads based on schedules.
+        - **Laboratory Agent**: Predicts heavy server and ventilation baseloads.
+        - **Hostel Agent**: Models peak resident usage (mornings and evenings).
+        - **Energy Manager Agent**: Employs optimization policies (Proportional, Priority, Game Theory Nash Equilibrium, or Reinforcement Learning Q-learning) to dynamically allocate energy.
+        
+        ### SDG Impact Alignment
+        
+        | Goal | Target Alignment | Project Implementation |
+        | --- | --- | --- |
+        | **SDG 7: Affordable & Clean Energy** | 7.3: Double the rate of energy efficiency improvements. | AI-driven curtailment of standby loads and optimization using Nash Equilibrium and RL policies to prevent overload wastage. |
+        | **SDG 12: Responsible Consumption** | 12.2: Achieve the sustainable management and efficient use of natural resources. | Reduces carbon footprints by optimizing local solar/wind integration and encouraging demand-side response. |
+        """)
+        
+    with col_graph:
+        st.markdown("### Agent Interactivity Model")
+        st.code("""
+  ┌────────────────────────────────────────────────────────┐
+  │                   Campus Environment                   │
+  │                     (Message Bus)                      │
+  └───────▲───────────────▲────────────────▲───────────────┘
+          │               │                │
+    ┌─────▼─────┐   ┌─────▼─────┐    ┌─────▼─────┐
+    │ Classroom │   │Laboratory │    │  Hostel   │
+    │   Agent   │   │   Agent   │    │   Agent   │
+    └─────▲─────┘   └─────▲─────┘    └─────▲─────┘
+          │               │                │
+          │         ┌─────▼─────┐          │
+          └────────►│  Energy   │◄─────────┘
+                    │  Manager  │
+                    └───────────┘
+        """, language="text")
+
+# ----------------------------------------------------
+# TAB 2: LIVE SIMULATION
+# ----------------------------------------------------
+with tab_simulation:
+    st.subheader("Simulation Controls & Real-Time Allocations")
     
-    st.info("💡 **Nash Equilibrium Insight:** The zones with lower demand/priority choose to DELAY to use battery backups, because attempting to REQUEST and failing results in a severe blackout penalty. Thus, (Request, Delay, Request, Delay, Request) is the only stable state.")
+    col_controls, col_display = st.columns([1, 3])
+    
+    with col_controls:
+        sim_duration = st.selectbox("Simulation Duration", [30, 100, 365], format_func=lambda x: f"{x} Days")
+        sim_policy = st.selectbox("Allocation Policy", ["equal_proportion", "priority", "game_theoretic", "rl"], format_func=lambda x: {
+            "equal_proportion": "Equal Proportional Sharing",
+            "priority": "Rule-Based Priority (Lab > Class > Hostel)",
+            "game_theoretic": "Game Theory (Nash Equilibrium)",
+            "rl": "Reinforcement Learning (Q-learning)"
+        }[x])
+        
+        run_sim = st.button("Run Simulation", type="primary")
+        
+    with col_display:
+        if run_sim or "sim_history" in st.session_state:
+            if run_sim:
+                with st.spinner("Running simulation..."):
+                    sim = CampusSimulation(
+                        config=config,
+                        policy=sim_policy,
+                        model_dir=MODELS_DIR,
+                        rl_policy_path=os.path.join(MODELS_DIR, "rl_qtable.json")
+                    )
+                    steps = sim_duration * 24
+                    df_history = sim.run_simulation(steps)
+                    st.session_state["sim_history"] = df_history
+                    st.session_state["sim_policy"] = sim_policy
+            
+            df_hist = st.session_state["sim_history"]
+            
+            cum_metrics = calculate_cumulative_metrics(df_hist)
+            
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-header">Energy Saved</div>
+                    <div class="metric-val">{cum_metrics['total_energy_saved_mwh']:.2f} MWh</div>
+                    <div class="metric-sub">Carbon savings support</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_m2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-header">Carbon Prevented</div>
+                    <div class="metric-val">{cum_metrics['total_carbon_saved_tons']:.2f} tCO2</div>
+                    <div class="metric-sub">SDG 12 Positive Impact</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_m3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-header">Avg Satisfaction</div>
+                    <div class="metric-val">{cum_metrics['average_satisfaction']*100:.1f}%</div>
+                    <div class="metric-sub">Comfort metric</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_m4:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-header">Sustainability Score</div>
+                    <div class="metric-val">{cum_metrics['average_sustainability_score']*100:.1f} / 100</div>
+                    <div class="metric-sub">Overall Rating</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("### Hourly Allocations vs Demands (First 72 Hours)")
+            sample_df = df_hist.head(72)
+            
+            fig_alloc = go.Figure()
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["req_classroom"], name="Classroom Request", line=dict(color="#e74c3c", dash="dash")))
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["alloc_classroom"], name="Classroom Allocated", line=dict(color="#c0392b")))
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["req_laboratory"], name="Lab Request", line=dict(color="#f1c40f", dash="dash")))
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["alloc_laboratory"], name="Lab Allocated", line=dict(color="#d35400")))
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["req_hostel"], name="Hostel Request", line=dict(color="#2ecc71", dash="dash")))
+            fig_alloc.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["alloc_hostel"], name="Hostel Allocated", line=dict(color="#27ae60")))
+            
+            fig_alloc.update_layout(
+                template="plotly_dark",
+                xaxis_title="Simulation Hours",
+                yaxis_title="Energy (kWh)",
+                height=400,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_alloc, use_container_width=True)
+            
+            st.markdown("### Total Grid Load vs Grid Capacity")
+            total_req = sample_df["req_classroom"] + sample_df["req_laboratory"] + sample_df["req_hostel"]
+            total_alloc = sample_df["total_energy_consumed"]
+            
+            fig_grid = go.Figure()
+            fig_grid.add_trace(go.Scatter(x=sample_df["step"], y=total_req, name="Total Demand Request", line=dict(color="#9b59b6")))
+            fig_grid.add_trace(go.Scatter(x=sample_df["step"], y=total_alloc, name="Total Allocated Power", fill='tozeroy', line=dict(color="#3498db")))
+            fig_grid.add_trace(go.Scatter(x=sample_df["step"], y=sample_df["total_capacity"], name="Grid Capacity Limit", line=dict(color="#e74c3c", width=2, dash="dot")))
+            
+            fig_grid.update_layout(
+                template="plotly_dark",
+                xaxis_title="Simulation Hours",
+                yaxis_title="Total Microgrid Load (kWh)",
+                height=400,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_grid, use_container_width=True)
+        else:
+            st.warning("Click 'Run Simulation' to start the campus microgrid simulation.")
+
+# ----------------------------------------------------
+# TAB 3: AI FORECASTS
+# ----------------------------------------------------
+with tab_forecast:
+    st.subheader("Demand Prediction Model Metrics & Evaluation")
+    
+    if os.path.exists(DATA_FILE):
+        df = pd.read_csv(DATA_FILE)
+        
+        st.markdown("### Synthetic Load Profile Dataset (Sample Rows)")
+        st.dataframe(df.head(10))
+        
+        st.markdown("### Demand Forecasting Performance (Actual vs Forecasted)")
+        agent_type = st.selectbox("Select Agent Type to inspect ML predictions:", ["classroom", "laboratory", "hostel"])
+        
+        model_path = os.path.join(MODELS_DIR, f"{agent_type}_demand_model.joblib")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            
+            test_window = df.iloc[500:500+168].copy()
+            occ_col = f"{agent_type}_occupancy"
+            prev_col = f"{agent_type}_prev_demand"
+            target_col = f"{agent_type}_demand"
+            
+            features = ["day_of_week", "hour", "temperature", "is_holiday", "is_exam_period", occ_col, prev_col]
+            X_eval = test_window[features].copy()
+            X_eval.columns = ["day_of_week", "hour", "temperature", "is_holiday", "is_exam_period", "occupancy", "prev_demand"]
+            
+            preds = model.predict(X_eval)
+            test_window["Predicted"] = preds
+            
+            fig_fc = go.Figure()
+            fig_fc.add_trace(go.Scatter(x=test_window["timestamp"], y=test_window[target_col], name="Actual Load Demand", line=dict(color="#2ecc71")))
+            fig_fc.add_trace(go.Scatter(x=test_window["timestamp"], y=test_window["Predicted"], name="ML Predicted Demand", line=dict(color="#e74c3c", dash="dash")))
+            
+            fig_fc.update_layout(
+                template="plotly_dark",
+                xaxis_title="Date Time",
+                yaxis_title="Electricity Load (kWh)",
+                height=450,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_fc, use_container_width=True)
+            
+            st.markdown("### Model Comparison & Evaluations")
+            from sklearn.model_selection import train_test_split
+            X_all = df[features].copy()
+            X_all.columns = ["day_of_week", "hour", "temperature", "is_holiday", "is_exam_period", "occupancy", "prev_demand"]
+            y_all = df[target_col].values
+            _, X_t, _, y_t = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
+            
+            from sklearn.linear_model import LinearRegression
+            lr = LinearRegression().fit(X_all, y_all)
+            lr_preds = lr.predict(X_t)
+            
+            lr_mae = mean_absolute_error(y_t, lr_preds)
+            lr_rmse = np.sqrt(mean_squared_error(y_t, lr_preds))
+            lr_r2 = r2_score(y_t, lr_preds)
+            
+            rf_preds = model.predict(X_t)
+            rf_mae = mean_absolute_error(y_t, rf_preds)
+            rf_rmse = np.sqrt(mean_squared_error(y_t, rf_preds))
+            rf_r2 = r2_score(y_t, rf_preds)
+            
+            metrics_compare = pd.DataFrame({
+                "Regression Model": ["Linear Regression", "Random Forest Regressor"],
+                "MAE (kWh)": [lr_mae, rf_mae],
+                "RMSE (kWh)": [lr_rmse, rf_rmse],
+                "R² Score": [lr_r2, rf_r2]
+            })
+            st.table(metrics_compare)
+        else:
+            st.warning("Model file not found. Run simulation to train models.")
+
+# ----------------------------------------------------
+# TAB 4: GAME THEORY & NASH SOLVER
+# ----------------------------------------------------
+with tab_game_theory:
+    st.subheader("Interactive Game Theory Analysis")
+    st.markdown("Tune nominal requests and grid limits to see how the agents coordinate strategy payoffs and Nash Equilibria.")
+    
+    col_g_inputs, col_g_results = st.columns([1, 2])
+    
+    with col_g_inputs:
+        st.markdown("#### Demand Signals (Nominal)")
+        class_nom = st.slider("Classroom Demand Request (kWh)", 50.0, 500.0, 200.0, 10.0)
+        lab_nom = st.slider("Laboratory Demand Request (kWh)", 50.0, 500.0, 150.0, 10.0)
+        hostel_nom = st.slider("Hostel Demand Request (kWh)", 100.0, 1000.0, 400.0, 20.0)
+        
+        st.markdown("#### Grid Scarcity Setting")
+        scarcity_cap = st.slider("Scarcity Capacity Limit (kWh)", 100.0, 1500.0, 600.0, 20.0)
+        
+    with col_g_results:
+        pm = generate_payoff_matrix(class_nom, lab_nom, hostel_nom, scarcity_cap, config.weights, config.grid)
+        sol = solve_game(pm)
+        
+        st.markdown(f"### Solver Result: `{sol['outcome_type']}`")
+        
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            st.metric("Classroom Strategy", sol["strategy_names"]["classroom"])
+            st.metric("Classroom Payoff Utility", f"{sol['payoffs']['classroom']:.3f}")
+        with col_s2:
+            st.metric("Laboratory Strategy", sol["strategy_names"]["laboratory"])
+            st.metric("Laboratory Payoff Utility", f"{sol['payoffs']['laboratory']:.3f}")
+        with col_s3:
+            st.metric("Hostel Strategy", sol["strategy_names"]["hostel"])
+            st.metric("Hostel Payoff Utility", f"{sol['payoffs']['hostel']:.3f}")
+            
+        st.metric("Social Welfare (Sum Utility)", f"{sol['social_welfare']:.3f}")
+        
+        st.markdown("### Payoff Matrix Slice (Classroom vs Laboratory Strategy)")
+        hostel_strat_idx = sol["strategy_profile"][2]
+        slice_pm = pm[:, :, hostel_strat_idx, :]
+        avg_slice_utility = np.mean(slice_pm, axis=2)
+        
+        fig_heat = px.imshow(
+            avg_slice_utility,
+            labels=dict(x="Laboratory Strategy", y="Classroom Strategy", color="Avg Utility"),
+            x=["Conservative (0.7x)", "Normal (1.0x)", "Aggressive (1.3x)"],
+            y=["Conservative (0.7x)", "Normal (1.0x)", "Aggressive (1.3x)"],
+            color_continuous_scale="Viridis"
+        )
+        fig_heat.update_layout(template="plotly_dark", height=350)
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+# ----------------------------------------------------
+# TAB 5: SUSTAINABILITY DASHBOARD
+# ----------------------------------------------------
+with tab_sustainability:
+    st.subheader("Microgrid Sustainability Analytics & KPIs")
+    
+    if "sim_history" in st.session_state:
+        df_hist = st.session_state["sim_history"]
+        cum_metrics = calculate_cumulative_metrics(df_hist)
+        
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=cum_metrics["average_sustainability_score"] * 100,
+            title={'text': "Campus Sustainability Index Score"},
+            gauge={
+                'axis': {'range': [0, 100]},
+                'bar': {'color': "#2ecc71"},
+                'steps': [
+                    {'range': [0, 50], 'color': "#c0392b"},
+                    {'range': [50, 80], 'color': "#f1c40f"},
+                    {'range': [80, 100], 'color': "#27ae60"}
+                ]
+            }
+        ))
+        fig_gauge.update_layout(template="plotly_dark", height=300)
+        st.plotly_chart(fig_gauge, use_container_width=True)
+        
+        st.markdown("### Cumulative Microgrid Efficiency Savings")
+        df_hist["cum_saved_kwh"] = df_hist["total_energy_saved"].cumsum()
+        df_hist["cum_cost_saved_usd"] = df_hist["cost_saved_usd"].cumsum()
+        
+        fig_cum = go.Figure()
+        fig_cum.add_trace(go.Scatter(x=df_hist["step"], y=df_hist["cum_saved_kwh"], name="Cumulative Energy Saved (kWh)", line=dict(color="#2ecc71")))
+        fig_cum.add_trace(go.Scatter(x=df_hist["step"], y=df_hist["cum_cost_saved_usd"], name="Cumulative Financial Savings ($)", yaxis="y2", line=dict(color="#f1c40f")))
+        
+        fig_cum.update_layout(
+            template="plotly_dark",
+            xaxis_title="Simulation Hours",
+            yaxis=dict(title="Energy Savings (kWh)", titlefont=dict(color="#2ecc71"), tickfont=dict(color="#2ecc71")),
+            yaxis2=dict(title="Financial Savings ($)", titlefont=dict(color="#f1c40f"), tickfont=dict(color="#f1c40f"), overlaying="y", side="right"),
+            height=400
+        )
+        st.plotly_chart(fig_cum, use_container_width=True)
+        
+        st.markdown("### Agent-by-Agent Comfort and Rolling Satisfaction")
+        c_sat = (df_hist["alloc_classroom"] / df_hist["req_classroom"]).fillna(1.0).rolling(24).mean()
+        l_sat = (df_hist["alloc_laboratory"] / df_hist["req_laboratory"]).fillna(1.0).rolling(24).mean()
+        h_sat = (df_hist["alloc_hostel"] / df_hist["req_hostel"]).fillna(1.0).rolling(24).mean()
+        
+        fig_sat = go.Figure()
+        fig_sat.add_trace(go.Scatter(x=df_hist["step"], y=c_sat, name="Classroom Comfort", line=dict(color="#e74c3c")))
+        fig_sat.add_trace(go.Scatter(x=df_hist["step"], y=l_sat, name="Laboratory Comfort", line=dict(color="#f1c40f")))
+        fig_sat.add_trace(go.Scatter(x=df_hist["step"], y=h_sat, name="Hostel Comfort", line=dict(color="#2ecc71")))
+        
+        fig_sat.update_layout(
+            template="plotly_dark",
+            xaxis_title="Simulation Hours (24h Rolling Mean)",
+            yaxis_title="Comfort Index (0 - 1.0)",
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_sat, use_container_width=True)
+    else:
+        st.warning("Please run a simulation on the 'Live Simulation' page to see sustainability reports.")

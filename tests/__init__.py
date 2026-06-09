@@ -1,1 +1,1 @@
-# flat test package init
+# flat tests package init

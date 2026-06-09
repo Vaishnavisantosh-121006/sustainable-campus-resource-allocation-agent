@@ -1,6 +1,6 @@
-# AI Smart Grid Campus Energy Resource Allocator
+# Sustainable Campus Resource Allocation Agent
 
-An Intelligent Smart Grid Energy Allocation AI Agent designed to solve power capacity allocation conflicts among campus building zones. The project maps to **SDG 7 (Affordable and Clean Energy)** and **SDG 11 (Sustainable Cities and Communities)**, utilizing Game Theory and an agent decision-making cognitive lifecycle (Perceive, Reason, Decide, Act).
+An autonomous multi-agent AI system designed to allocate limited campus electricity grid capacity among Classrooms, Laboratories, and Hostels. The project maps to **SDG 7 (Affordable and Clean Energy)** and **SDG 12 (Responsible Consumption and Production)**, utilizing Demand Prediction, Game Theory, and Reinforcement Learning in a simple flat layout.
 
 ---
 
@@ -15,13 +15,11 @@ An Intelligent Smart Grid Energy Allocation AI Agent designed to solve power cap
 
 ## Features
 
-- **Agent Cognitive Lifecycle**: Modeled decision-making split into four distinct stages:
-  1. **Perception**: Observes environment state, reading building zone loads and available capacity.
-  2. **Reasoning**: Evaluates electrical base utility score (load urgency curves) based on demand levels, occupancy weights, and priority scores.
-  3. **Decision-making**: Resolves conflicts by calculating the Pure Strategy Nash Equilibrium (PSNE) using dominant strategy reduction.
-  4. **Action**: Deploys electrical power capacity blocks (e.g. 1 MW blocks) to selected building zones.
-- **Payoff Matrix Analysis**: Dynamic payoffs computed for different profile decisions (All Delay, Nash Equilibrium, Surge Competition) demonstrating microgrid stability.
-- **Streamlit Web Dashboard**: Interactive, single-page interface to tweak parameters and instantly run the optimizer.
+- **Multi-Agent Energy Management**: BaseAgent, ClassroomAgent, LaboratoryAgent, and HostelAgent communicate with a central EnergyManagerAgent.
+- **Demand Forecasting**: Random Forest and Linear Regression models trained on seasonal load parameters (hour, day, occupancy, temp, holidays, exam periods).
+- **Game Theory Negotiation**: Solves grid scarcity conflict by formulating a 3D payoff matrix across agent strategies (Conservative, Normal, Aggressive) and finding the Pure Strategy Nash Equilibrium (PSNE).
+- **Reinforcement Learning**: Operates a Q-Learning controller that learns to select macro-allocation policies to maximize campus occupant comfort while avoiding blackout overloads and daily budget overruns.
+- **Streamlit Web Dashboard**: An interactive, single-page interface to adjust grid supply, test weights, run multi-day simulations, inspect ML predictions, and track carbon footprint offsets.
 
 ---
 
@@ -31,22 +29,26 @@ An Intelligent Smart Grid Energy Allocation AI Agent designed to solve power cap
 sustainable-campus-resource-allocation-agent/
 │
 ├── data/
-│   └── zones.csv              # Campus Building Zones database
+│   └── campus_energy_demand.csv       # Generated 365-day hourly dataset
 │
-├── src/                       # Source code package
-│   ├── __init__.py
-│   ├── agent.py               # AI Agent (Perceive, Reason, Decide, Act)
-│   ├── environment.py         # Microgrid Environment
-│   ├── game_theory.py         # Game Theory Nash Allocator
-│   ├── models.py              # Zone Data Model
-│   └── utils.py               # Payoff reporting helpers
+├── models/
+│   ├── classroom_demand_model.joblib  # Trained forecasting models
+│   ├── laboratory_demand_model.joblib
+│   └── hostel_demand_model.joblib
 │
-├── tests/                     # Unit Test Suite
+├── src/                       # Source code package (flat layout)
 │   ├── __init__.py
-│   └── test_agent.py          # Unit test suite
+│   ├── config.py              # App & Grid configurations (Pydantic)
+│   ├── agents.py              # Agents and environment message bus
+│   ├── game_theory.py         # Utility, payoff matrices, Nash solver
+│   ├── ai.py                  # Dataset generator, regressor training, Q-learning
+│   └── simulation.py          # CampusSimulation loop and metrics
+│
+├── tests/                     # Test Suite
+│   ├── __init__.py
+│   └── test_project.py        # Consolidated test suite
 │
 ├── app.py                     # Streamlit Dashboard UI
-├── main.py                    # Console entrypoint
 ├── requirements.txt           # Light dependencies
 ├── .gitignore                 # standard git ignore file
 └── README.md                  # Project overview
@@ -84,22 +86,14 @@ sustainable-campus-resource-allocation-agent/
 
 ## Running the Project
 
-### 1. Run the Console Simulator
-Execute the simulation directly via command line:
-```bash
-python main.py
-```
-Options:
-- `--capacity <int>`: Adjust available grid supply MW (default: 3).
-- `--data <path>`: Load a custom zones CSV.
-
-### 2. Run the Streamlit Dashboard
+### 1. Run the Streamlit Dashboard
 ```bash
 streamlit run app.py
 ```
 Open `http://localhost:8501` in your browser.
+*(On first startup, the app automatically generates the dataset and trains the models in the background).*
 
-### 3. Run the Unit Test Suite
+### 2. Run the Unit Test Suite
 ```bash
 python -m pytest tests/
 ```
